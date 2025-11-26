@@ -1896,7 +1896,29 @@ function CanvasIsometricGrid({ overlayMode, selectedTile, setSelectedTile }: {
       tile: Tile;
     };
     const buildingQueue: BuildingDraw[] = [];
+    const waterQueue: BuildingDraw[] = [];
+    const waterBaseTileQueue: BuildingDraw[] = [];
+    const beachQueue: BuildingDraw[] = [];
     const overlayQueue: OverlayDraw[] = [];
+    
+    // Helper function to check if a tile is adjacent to water
+    function isAdjacentToWater(gridX: number, gridY: number): boolean {
+      const directions = [
+        [-1, 0], [1, 0], [0, -1], [0, 1], // cardinal directions
+        [-1, -1], [1, -1], [-1, 1], [1, 1] // diagonal directions
+      ];
+      
+      for (const [dx, dy] of directions) {
+        const nx = gridX + dx;
+        const ny = gridY + dy;
+        if (nx >= 0 && nx < gridSize && ny >= 0 && ny < gridSize) {
+          if (grid[ny][nx].building.type === 'water') {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
     
     // Draw tiles in isometric order (back to front)
     for (let sum = 0; sum < gridSize * 2 - 1; sum++) {
@@ -1923,14 +1945,32 @@ function CanvasIsometricGrid({ overlayMode, selectedTile, setSelectedTile }: {
           y >= Math.min(dragStartTile.y, dragEndTile.y) &&
           y <= Math.max(dragStartTile.y, dragEndTile.y);
         
-        // Draw base tile
-        drawIsometricTile(ctx, screenX, screenY, tile, !!(isHovered || isSelected || isInDragRect), zoom);
+        // Draw base tile for non-water tiles (water tiles will be drawn after water sprites)
+        if (tile.building.type !== 'water') {
+          drawIsometricTile(ctx, screenX, screenY, tile, !!(isHovered || isSelected || isInDragRect), zoom);
+        }
         
-        const isBuilding = tile.building.type !== 'grass' && tile.building.type !== 'empty';
-        if (isBuilding) {
+        // Separate water tiles into their own queue (drawn first, below everything)
+        if (tile.building.type === 'water') {
           const size = getBuildingSize(tile.building.type);
           const depth = x + y + size.width + size.height - 2;
-          buildingQueue.push({ screenX, screenY, tile, depth });
+          waterQueue.push({ screenX, screenY, tile, depth });
+          // Also queue the base tile to be drawn after the water sprite
+          waterBaseTileQueue.push({ screenX, screenY, tile, depth });
+        }
+        // Check for beach tiles (grass/empty tiles adjacent to water)
+        else if ((tile.building.type === 'grass' || tile.building.type === 'empty') &&
+                 isAdjacentToWater(x, y)) {
+          beachQueue.push({ screenX, screenY, tile, depth: x + y });
+        }
+        // Other buildings go to regular building queue
+        else {
+          const isBuilding = tile.building.type !== 'grass' && tile.building.type !== 'empty';
+          if (isBuilding) {
+            const size = getBuildingSize(tile.building.type);
+            const depth = x + y + size.width + size.height - 2;
+            buildingQueue.push({ screenX, screenY, tile, depth });
+          }
         }
         
         const showOverlay =
@@ -1943,6 +1983,34 @@ function CanvasIsometricGrid({ overlayMode, selectedTile, setSelectedTile }: {
         }
       }
     }
+    
+    // Draw water sprites first (below everything)
+    waterQueue
+      .sort((a, b) => a.depth - b.depth)
+      .forEach(({ tile, screenX, screenY }) => {
+        drawBuilding(ctx, screenX, screenY, tile);
+      });
+    
+    // Draw base tiles for water tiles on top of water sprites
+    waterBaseTileQueue
+      .sort((a, b) => a.depth - b.depth)
+      .forEach(({ tile, screenX, screenY }) => {
+        const isHovered = hoveredTile?.x === tile.x && hoveredTile?.y === tile.y;
+        const isSelected = selectedTile?.x === tile.x && selectedTile?.y === tile.y;
+        const isInDragRect = showsDragGrid && dragStartTile && dragEndTile && 
+          tile.x >= Math.min(dragStartTile.x, dragEndTile.x) &&
+          tile.x <= Math.max(dragStartTile.x, dragEndTile.x) &&
+          tile.y >= Math.min(dragStartTile.y, dragEndTile.y) &&
+          tile.y <= Math.max(dragStartTile.y, dragEndTile.y);
+        drawIsometricTile(ctx, screenX, screenY, tile, !!(isHovered || isSelected || isInDragRect), zoom);
+      });
+    
+    // Draw beach tiles (below buildings but above water)
+    beachQueue
+      .sort((a, b) => a.depth - b.depth)
+      .forEach(({ tile, screenX, screenY }) => {
+        drawBeach(ctx, screenX, screenY, tile.x, tile.y);
+      });
     
     // Draw buildings sorted by depth so multi-tile sprites sit above adjacent tiles
     buildingQueue
@@ -2188,6 +2256,149 @@ function CanvasIsometricGrid({ overlayMode, selectedTile, setSelectedTile }: {
     }
   }
   
+  // Helper function to check if a tile is water
+  function isWater(gridX: number, gridY: number): boolean {
+    if (gridX < 0 || gridX >= gridSize || gridY < 0 || gridY >= gridSize) return false;
+    return grid[gridY][gridX].building.type === 'water';
+  }
+  
+  // Draw beach effect on tiles adjacent to water (sidewalk-style)
+  function drawBeach(ctx: CanvasRenderingContext2D, x: number, y: number, gridX: number, gridY: number) {
+    const w = TILE_WIDTH;
+    const h = TILE_HEIGHT;
+    
+    // Check which edges are adjacent to water (in isometric coordinates)
+    const north = isWater(gridX - 1, gridY);  // top-left edge
+    const east = isWater(gridX, gridY - 1);   // top-right edge
+    const south = isWater(gridX + 1, gridY);  // bottom-right edge
+    const west = isWater(gridX, gridY + 1);   // bottom-left edge
+    
+    // Beach/sidewalk configuration
+    const beachWidth = w * 0.08; // Width of the beach strip (same as sidewalk)
+    const beachColor = '#d4a574'; // Light sandy/tan color for beach
+    const curbColor = '#b8956a'; // Darker color for curb edge
+    
+    // Diamond corner points
+    const topCorner = { x: x + w / 2, y: y };
+    const rightCorner = { x: x + w, y: y + h / 2 };
+    const bottomCorner = { x: x + w / 2, y: y + h };
+    const leftCorner = { x: x, y: y + h / 2 };
+    
+    // Draw beach strip helper - draws a strip along an edge facing water
+    const drawBeachEdge = (
+      startX: number, startY: number, 
+      endX: number, endY: number,
+      inwardDx: number, inwardDy: number
+    ) => {
+      const swWidth = beachWidth;
+      
+      // Extend edges slightly beyond corners to ensure proper connection
+      const extendAmount = swWidth * 0.3;
+      const edgeDx = (endX - startX) / Math.hypot(endX - startX, endY - startY);
+      const edgeDy = (endY - startY) / Math.hypot(endX - startX, endY - startY);
+      
+      // Extend start and end points outward along the edge
+      const extendedStartX = startX - edgeDx * extendAmount;
+      const extendedStartY = startY - edgeDy * extendAmount;
+      const extendedEndX = endX + edgeDx * extendAmount;
+      const extendedEndY = endY + edgeDy * extendAmount;
+      
+      // Draw curb (darker line at outer edge)
+      ctx.strokeStyle = curbColor;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(extendedStartX, extendedStartY);
+      ctx.lineTo(extendedEndX, extendedEndY);
+      ctx.stroke();
+      
+      // Draw beach fill
+      ctx.fillStyle = beachColor;
+      ctx.beginPath();
+      ctx.moveTo(extendedStartX, extendedStartY);
+      ctx.lineTo(extendedEndX, extendedEndY);
+      ctx.lineTo(extendedEndX + inwardDx * swWidth, extendedEndY + inwardDy * swWidth);
+      ctx.lineTo(extendedStartX + inwardDx * swWidth, extendedStartY + inwardDy * swWidth);
+      ctx.closePath();
+      ctx.fill();
+    };
+    
+    // North edge beach (top-left edge: leftCorner to topCorner)
+    // Inward direction points toward center-right and down
+    if (north) {
+      const inwardDx = 0.707; // ~45 degrees inward
+      const inwardDy = 0.707;
+      drawBeachEdge(leftCorner.x, leftCorner.y, topCorner.x, topCorner.y, inwardDx, inwardDy);
+    }
+    
+    // East edge beach (top-right edge: topCorner to rightCorner)
+    // Inward direction points toward center-left and down
+    if (east) {
+      const inwardDx = -0.707;
+      const inwardDy = 0.707;
+      drawBeachEdge(topCorner.x, topCorner.y, rightCorner.x, rightCorner.y, inwardDx, inwardDy);
+    }
+    
+    // South edge beach (bottom-right edge: rightCorner to bottomCorner)
+    // Inward direction points toward center-left and up
+    if (south) {
+      const inwardDx = -0.707;
+      const inwardDy = -0.707;
+      drawBeachEdge(rightCorner.x, rightCorner.y, bottomCorner.x, bottomCorner.y, inwardDx, inwardDy);
+    }
+    
+    // West edge beach (bottom-left edge: bottomCorner to leftCorner)
+    // Inward direction points toward center-right and up
+    if (west) {
+      const inwardDx = 0.707;
+      const inwardDy = -0.707;
+      drawBeachEdge(bottomCorner.x, bottomCorner.y, leftCorner.x, leftCorner.y, inwardDx, inwardDy);
+    }
+    
+    // Draw corner beach pieces for adjacent edges that both face water
+    const cornerRadius = beachWidth * 1.2;
+    ctx.fillStyle = beachColor;
+    
+    // Top corner (where north and east edges meet)
+    if (north && east) {
+      ctx.beginPath();
+      ctx.moveTo(topCorner.x, topCorner.y);
+      ctx.lineTo(topCorner.x + 0.707 * cornerRadius, topCorner.y + 0.707 * cornerRadius);
+      ctx.lineTo(topCorner.x - 0.707 * cornerRadius, topCorner.y + 0.707 * cornerRadius);
+      ctx.closePath();
+      ctx.fill();
+    }
+    
+    // Right corner (where east and south edges meet)
+    if (east && south) {
+      ctx.beginPath();
+      ctx.moveTo(rightCorner.x, rightCorner.y);
+      ctx.lineTo(rightCorner.x - 0.707 * cornerRadius, rightCorner.y + 0.707 * cornerRadius);
+      ctx.lineTo(rightCorner.x - 0.707 * cornerRadius, rightCorner.y - 0.707 * cornerRadius);
+      ctx.closePath();
+      ctx.fill();
+    }
+    
+    // Bottom corner (where south and west edges meet)
+    if (south && west) {
+      ctx.beginPath();
+      ctx.moveTo(bottomCorner.x, bottomCorner.y);
+      ctx.lineTo(bottomCorner.x - 0.707 * cornerRadius, bottomCorner.y - 0.707 * cornerRadius);
+      ctx.lineTo(bottomCorner.x + 0.707 * cornerRadius, bottomCorner.y - 0.707 * cornerRadius);
+      ctx.closePath();
+      ctx.fill();
+    }
+    
+    // Left corner (where west and north edges meet)
+    if (west && north) {
+      ctx.beginPath();
+      ctx.moveTo(leftCorner.x, leftCorner.y);
+      ctx.lineTo(leftCorner.x + 0.707 * cornerRadius, leftCorner.y - 0.707 * cornerRadius);
+      ctx.lineTo(leftCorner.x + 0.707 * cornerRadius, leftCorner.y + 0.707 * cornerRadius);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  
   // Helper function to check if a tile has a road
   function hasRoad(gridX: number, gridY: number): boolean {
     if (gridX < 0 || gridX >= gridSize || gridY < 0 || gridY >= gridSize) return false;
@@ -2264,21 +2475,32 @@ function CanvasIsometricGrid({ overlayMode, selectedTile, setSelectedTile }: {
     ) => {
       const swWidth = sidewalkWidth;
       
+      // Extend edges slightly beyond corners to ensure proper connection
+      const extendAmount = swWidth * 0.3;
+      const edgeDx = (endX - startX) / Math.hypot(endX - startX, endY - startY);
+      const edgeDy = (endY - startY) / Math.hypot(endX - startX, endY - startY);
+      
+      // Extend start and end points outward along the edge
+      const extendedStartX = startX - edgeDx * extendAmount;
+      const extendedStartY = startY - edgeDy * extendAmount;
+      const extendedEndX = endX + edgeDx * extendAmount;
+      const extendedEndY = endY + edgeDy * extendAmount;
+      
       // Draw curb (darker line at outer edge)
       ctx.strokeStyle = curbColor;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(startX, startY);
-      ctx.lineTo(endX, endY);
+      ctx.moveTo(extendedStartX, extendedStartY);
+      ctx.lineTo(extendedEndX, extendedEndY);
       ctx.stroke();
       
       // Draw sidewalk fill
       ctx.fillStyle = sidewalkColor;
       ctx.beginPath();
-      ctx.moveTo(startX, startY);
-      ctx.lineTo(endX, endY);
-      ctx.lineTo(endX + inwardDx * swWidth, endY + inwardDy * swWidth);
-      ctx.lineTo(startX + inwardDx * swWidth, startY + inwardDy * swWidth);
+      ctx.moveTo(extendedStartX, extendedStartY);
+      ctx.lineTo(extendedEndX, extendedEndY);
+      ctx.lineTo(extendedEndX + inwardDx * swWidth, extendedEndY + inwardDy * swWidth);
+      ctx.lineTo(extendedStartX + inwardDx * swWidth, extendedStartY + inwardDy * swWidth);
       ctx.closePath();
       ctx.fill();
     };
@@ -2580,13 +2802,32 @@ function CanvasIsometricGrid({ overlayMode, selectedTile, setSelectedTile }: {
           
           drawY = drawPosY + h - destHeight + verticalPush;
           
-          // Draw the sprite with correct aspect ratio
-          ctx.drawImage(
-            filteredSpriteSheet,
-            coords.sx, coords.sy, coords.sw, coords.sh,  // Source: exact tile from sprite sheet
-            Math.round(drawX), Math.round(drawY),        // Destination position
-            Math.round(destWidth), Math.round(destHeight) // Destination size (preserving aspect ratio)
-          );
+          // Special handling for water sprites: scale to ~65% (30% bigger than 50%) and center on tile
+          if (buildingType === 'water') {
+            // Center the water sprite on the tile (not at bottom like buildings)
+            const tileCenterX = drawPosX + w / 2;
+            const tileCenterY = drawPosY + h / 2;
+            
+            // Scale to 65% (30% bigger than the previous 50%)
+            const scaledWidth = destWidth * 0.65;
+            const scaledHeight = destHeight * 0.65;
+            
+            // Draw the sprite scaled down and centered on tile (no rotation to maintain tiling)
+            ctx.drawImage(
+              filteredSpriteSheet,
+              coords.sx, coords.sy, coords.sw, coords.sh,  // Source: exact tile from sprite sheet
+              Math.round(tileCenterX - scaledWidth / 2), Math.round(tileCenterY - scaledHeight / 2),  // Centered position
+              Math.round(scaledWidth), Math.round(scaledHeight) // Scaled size
+            );
+          } else {
+            // Draw the sprite with correct aspect ratio (normal buildings)
+            ctx.drawImage(
+              filteredSpriteSheet,
+              coords.sx, coords.sy, coords.sw, coords.sh,  // Source: exact tile from sprite sheet
+              Math.round(drawX), Math.round(drawY),        // Destination position
+              Math.round(destWidth), Math.round(destHeight) // Destination size (preserving aspect ratio)
+            );
+          }
         }
       }
     } else if (!USE_TILE_RENDERER) {
