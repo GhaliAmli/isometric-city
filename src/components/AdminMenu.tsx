@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { useGame } from '@/context/GameContext';
-import { Settings, DollarSign, Building, TreePine, Wrench, AlertTriangle, Eye, Bug, Shield, ShieldAlert, Zap, Clock } from 'lucide-react';
+import { Settings, DollarSign, Building, TreePine, Wrench, AlertTriangle, Eye, Bug, Shield, ShieldAlert, Zap } from 'lucide-react';
 import { OverlayMode } from '@/components/game/types';
 
 interface AdminMenuProps {
